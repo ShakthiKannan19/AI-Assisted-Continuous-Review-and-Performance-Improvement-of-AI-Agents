@@ -1,0 +1,332 @@
+{
+  "name": "AI Agent Continuous Review & Evaluation Workflow",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "ai-agent-evaluate",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "c6170318-7009-41b4-af8c-8d3c146acc4e",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -192,
+        -16
+      ],
+      "webhookId": "ai-agent-evaluate"
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body || $input.first().json;\n\nif (!body || typeof body.message !== 'string' || body.message.trim() === '') {\n  return {\n    json: {\n      success: false,\n      status: 'INVALID_REQUEST',\n      error: 'message is required and cannot be empty'\n    }\n  };\n}\n\nconst message = body.message.trim();\nconst conversationId = body.conversationId || `conv-${Date.now()}`;\nconst agentId = body.agentId || 'agent-v1';\nconst agentVersion = body.agentVersion || 'v1.0.0';\n\nconst systemPrompt = `You are a helpful AI assistant. Answer the user's exact question accurately, clearly, and directly. Never answer a different topic from the user's question.`;\n\nreturn {\n  json: {\n    success: true,\n    message,\n    conversationId,\n    agentId,\n    agentVersion,\n    systemPrompt,\n    timestamp: new Date().toISOString()\n  }\n};"
+      },
+      "id": "27e1dba9-c6e2-4235-8649-ec92a394d135",
+      "name": "Validate & Sanitize Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        64,
+        -16
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.message }}",
+        "needsFallback": true,
+        "options": {
+          "systemMessage": "={{ $json.systemPrompt }}"
+        }
+      },
+      "id": "169413c8-4c5f-45ba-8738-ede6d88e0814",
+      "name": "AI Agent - Generator",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2.2,
+      "position": [
+        320,
+        -16
+      ]
+    },
+    {
+      "parameters": {
+        "modelName": "models/gemini-3.6-flash",
+        "options": {}
+      },
+      "id": "418d3e59-6f16-4db4-aa92-d1755afec37c",
+      "name": "Gemini Generator - Primary",
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1.1,
+      "position": [
+        272,
+        288
+      ],
+      "credentials": {
+        "googlePalmApi": {
+          "id": "3JfjvKxjE73Dg9Yt",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "6a27fd4c-2aeb-4744-a0fb-707725f5e950",
+      "name": "Gemini Generator - Fallback",
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1.1,
+      "position": [
+        464,
+        288
+      ],
+      "credentials": {
+        "googlePalmApi": {
+          "id": "3JfjvKxjE73Dg9Yt",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $('Validate & Sanitize Input').first().json;\nconst agent = $input.first().json;\n\nconst agentAnswer = agent.output || agent.text || agent.response || '';\n\nif (!agentAnswer || agentAnswer.trim() === '') {\n  return {\n    json: {\n      ...input,\n      success: false,\n      status: 'AI_GENERATION_FAILED',\n      answer: null,\n      evaluationUserPrompt: null,\n      evaluatorSystemPrompt: null\n    }\n  };\n}\n\nconst evaluatorSystemPrompt = `You are an expert AI Response Quality Evaluator.\n\nEvaluate the AI response against the original user question.\n\nFirst determine whether the response answers the actual topic requested.\n\nIf the response is completely off-topic, this is a critical failure.\n\nScore these five criteria from 0 to 10:\n1. correctness\n2. relevance\n3. completeness\n4. clarity\n5. instruction_following\n\nCalculate:\noverall_score = (correctness + relevance + completeness + clarity + instruction_following) / 5\n\nVerdict:\n8.0-10.0 = PASS\n6.0-7.9 = NEEDS_IMPROVEMENT\n0.0-5.9 = FAIL\n\nReturn ONLY valid JSON. No markdown and no code fences.\n\nRequired schema:\n{\n  \"correctness\": 0,\n  \"relevance\": 0,\n  \"completeness\": 0,\n  \"clarity\": 0,\n  \"instruction_following\": 0,\n  \"overall_score\": 0,\n  \"verdict\": \"FAIL\",\n  \"strengths\": [],\n  \"weaknesses\": [],\n  \"improvement_suggestions\": []\n}`;\n\nconst evaluationUserPrompt = `[ORIGINAL USER QUESTION]\\n${input.message}\\n\\n[AI AGENT RESPONSE]\\n${agentAnswer}`;\n\nreturn {\n  json: {\n    ...input,\n    agentAnswer,\n    evaluatorSystemPrompt,\n    evaluationUserPrompt\n  }\n};"
+      },
+      "id": "d2d84f98-1ddf-4cc2-8f89-8073ad543f24",
+      "name": "Prepare Evaluation Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        560,
+        -16
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.evaluationUserPrompt }}",
+        "needsFallback": true,
+        "options": {
+          "systemMessage": "={{ $json.evaluatorSystemPrompt }}"
+        }
+      },
+      "id": "40e93b11-490d-42d3-a5d5-e3a55645b913",
+      "name": "AI Evaluator - Critic",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2.2,
+      "position": [
+        816,
+        -16
+      ]
+    },
+    {
+      "parameters": {
+        "modelName": "models/gemini-3.6-flash",
+        "options": {}
+      },
+      "id": "a9d26b46-358e-43c3-baf8-19f63011c9d1",
+      "name": "Gemini Evaluator - Primary",
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1.1,
+      "position": [
+        768,
+        288
+      ],
+      "credentials": {
+        "googlePalmApi": {
+          "id": "3JfjvKxjE73Dg9Yt",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "a421cbff-f4d1-4ca8-a177-8e4118742519",
+      "name": "Gemini Evaluator - Fallback",
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1.1,
+      "position": [
+        960,
+        288
+      ],
+      "credentials": {
+        "googlePalmApi": {
+          "id": "3JfjvKxjE73Dg9Yt",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Prepare Evaluation Prompt').first().json;\nconst result = $input.first().json;\n\nif (context.success === false || !context.agentAnswer) {\n  return {\n    json: {\n      success: false,\n      status: 'AI_SERVICE_UNAVAILABLE',\n      conversationId: context.conversationId,\n      agentId: context.agentId,\n      agentVersion: context.agentVersion,\n      userInput: context.message,\n      answer: null,\n      evaluation: null,\n      error: 'The AI agent could not generate a response.'\n    }\n  };\n}\n\nlet text = result.output || result.text || result.response || '';\ntext = String(text).replace(/^```json\\\\s*/i, '').replace(/^```\\\\s*/i, '').replace(/```$/g, '').trim();\n\nlet evaluation;\n\ntry {\n  evaluation = JSON.parse(text);\n} catch (error) {\n  return {\n    json: {\n      success: false,\n      status: 'EVALUATION_PARSE_ERROR',\n      conversationId: context.conversationId,\n      agentId: context.agentId,\n      agentVersion: context.agentVersion,\n      userInput: context.message,\n      answer: context.agentAnswer,\n      evaluation: null,\n      error: 'Evaluator did not return valid JSON.'\n    }\n  };\n}\n\nconst scores = [\n  Number(evaluation.correctness ?? 0),\n  Number(evaluation.relevance ?? 0),\n  Number(evaluation.completeness ?? 0),\n  Number(evaluation.clarity ?? 0),\n  Number(evaluation.instruction_following ?? 0)\n];\n\nconst overall = Number((scores.reduce((a, b) => a + b, 0) / 5).toFixed(1));\n\nlet verdict = 'FAIL';\nif (overall >= 8) verdict = 'PASS';\nelse if (overall >= 6) verdict = 'NEEDS_IMPROVEMENT';\n\nreturn {\n  json: {\n    success: true,\n    status: 'COMPLETED',\n    conversationId: context.conversationId,\n    agentId: context.agentId,\n    agentVersion: context.agentVersion,\n    userInput: context.message,\n    answer: context.agentAnswer,\n    evaluation: {\n      correctness: scores[0],\n      relevance: scores[1],\n      completeness: scores[2],\n      clarity: scores[3],\n      instruction_following: scores[4],\n      overall_score: overall,\n      verdict,\n      strengths: Array.isArray(evaluation.strengths) ? evaluation.strengths : [],\n      weaknesses: Array.isArray(evaluation.weaknesses) ? evaluation.weaknesses : [],\n      improvement_suggestions: Array.isArray(evaluation.improvement_suggestions) ? evaluation.improvement_suggestions : []\n    },\n    createdAt: new Date().toISOString()\n  }\n};"
+      },
+      "id": "f75453fa-b1d5-4ca6-a2c5-2d7bba23d0a4",
+      "name": "Parse & Normalize Evaluation",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1072,
+        -16
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Access-Control-Allow-Origin",
+                "value": "*"
+              },
+              {
+                "name": "Access-Control-Allow-Methods",
+                "value": "POST, OPTIONS, GET"
+              },
+              {
+                "name": "Access-Control-Allow-Headers",
+                "value": "Content-Type, Authorization"
+              }
+            ]
+          }
+        }
+      },
+      "id": "cd3bbc20-4320-4a18-a5f3-f1193f71d119",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1312,
+        -16
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Validate & Sanitize Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate & Sanitize Input": {
+      "main": [
+        [
+          {
+            "node": "AI Agent - Generator",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent - Generator": {
+      "main": [
+        [
+          {
+            "node": "Prepare Evaluation Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini Generator - Primary": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent - Generator",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini Generator - Fallback": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent - Generator",
+            "type": "ai_languageModel",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Prepare Evaluation Prompt": {
+      "main": [
+        [
+          {
+            "node": "AI Evaluator - Critic",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini Evaluator - Primary": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Evaluator - Critic",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini Evaluator - Fallback": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Evaluator - Critic",
+            "type": "ai_languageModel",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "AI Evaluator - Critic": {
+      "main": [
+        [
+          {
+            "node": "Parse & Normalize Evaluation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse & Normalize Evaluation": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "81235c1a-5610-44f1-bd43-f2856b3e225f",
+  "meta": {
+    "instanceId": "1ca7918f845f21f05c2b97d02e2780ef1c96f5f9810fb72306c5f7bd22f27071"
+  },
+  "nodeGroups": [],
+  "id": "7H6duWyOln3JCJ1l",
+  "tags": []
+}
